@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZAPPING</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+<style>
+  /* ═══ Catppuccin Mocha Palette ═══ */
+  :root {
+    --ctp-rosewater: #f5e0dc;
+    --ctp-flamingo:  #f2cdcd;
+    --ctp-pink:      #f5c2e7;
+    --ctp-mauve:     #cba6f7;
+    --ctp-red:       #f38ba8;
+    --ctp-maroon:    #eba0ac;
+    --ctp-peach:     #fab387;
+    --ctp-yellow:    #f9e2af;
+    --ctp-green:     #a6e3a1;
+    --ctp-teal:      #94e2d5;
+    --ctp-sky:       #89dceb;
+    --ctp-sapphire:  #74c7ec;
+    --ctp-blue:      #89b4fa;
+    --ctp-lavender:  #b4befe;
+    --ctp-text:      #cdd6f4;
+    --ctp-subtext1:  #bac2de;
+    --ctp-subtext0:  #a6adc8;
+    --ctp-overlay2:  #9399b2;
+    --ctp-overlay1:  #7f849c;
+    --ctp-overlay0:  #6c7086;
+    --ctp-surface2:  #585b70;
+    --ctp-surface1:  #45475a;
+    --ctp-surface0:  #313244;
+    --ctp-base:      #1e1e2e;
+    --ctp-mantle:    #181825;
+    --ctp-crust:     #11111b;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=VT323&family=Press+Start+2P&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--ctp-crust);
+    color: var(--ctp-text);
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    min-height: 100vh;
+  }
+
+  /* ═══ CRT scanline overlay ═══ */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.08) 2px,
+      rgba(0, 0, 0, 0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ═══ Header ═══ */
+  header {
+    background: var(--ctp-mantle);
+    border-bottom: 4px solid var(--ctp-mauve);
+    padding: 20px 30px;
+    text-align: center;
+    box-shadow:
+      inset 0 -2px 0 var(--ctp-surface0),
+      0 4px 0 var(--ctp-crust);
+  }
+
+  header h1 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 28px;
+    color: var(--ctp-mauve);
+    text-shadow:
+      3px 3px 0 var(--ctp-crust),
+      -1px -1px 0 var(--ctp-lavender);
+    letter-spacing: 2px;
+  }
+
+  header p {
+    color: var(--ctp-overlay1);
+    font-size: 20px;
+    margin-top: 8px;
+  }
+
+  .github-link {
+    display: inline-block;
+    color: var(--ctp-overlay1);
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    text-decoration: none;
+    padding: 6px 12px;
+    border: 2px solid var(--ctp-surface2);
+    border-radius: 2px;
+    background: var(--ctp-surface0);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      2px 2px 0 var(--ctp-crust);
+    transition: border-color 0.15s, color 0.15s, transform 0.1s;
+  }
+
+  .github-link:hover {
+    color: var(--ctp-text);
+    border-color: var(--ctp-mauve);
+    transform: translate(-1px, -1px);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      3px 3px 0 var(--ctp-crust);
+  }
+
+  .github-link:active {
+    transform: translate(1px, 1px);
+    box-shadow: 0 0 0;
+  }
+
+  /* ═══ Filter bar ═══ */
+  .filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 30px;
+    background: var(--ctp-mantle);
+    border-bottom: 2px solid var(--ctp-surface0);
+  }
+
+  .search-input {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: var(--ctp-text);
+    background: var(--ctp-surface0);
+    border: 2px solid var(--ctp-surface2);
+    border-radius: 20px;
+    padding: 4px 14px;
+    margin-left: auto;
+    width: 180px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .search-input::placeholder {
+    color: var(--ctp-overlay0);
+  }
+
+  .search-input:focus {
+    border-color: var(--ctp-mauve);
+  }
+
+  @media (max-width: 600px) {
+    .filter-bar {
+      justify-content: center;
+    }
+    .search-input {
+      margin-left: 0;
+      width: auto;
+      flex: none;
+    }
+    .cat-nav {
+      justify-content: center;
+    }
+  }
+
+  .filter-bar button {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border: 2px solid var(--ctp-surface2);
+    border-radius: 20px;
+    background: var(--ctp-surface0);
+    cursor: pointer;
+    box-shadow: 2px 2px 0 var(--ctp-crust);
+    transition: border-color 0.15s, color 0.15s, transform 0.1s, background 0.15s;
+  }
+
+  .filter-bar button[data-filter="all"] {
+    color: var(--ctp-lavender);
+    border-color: var(--ctp-surface2);
+  }
+  .filter-bar button[data-filter="all"]:hover,
+  .filter-bar button[data-filter="all"].active {
+    border-color: var(--ctp-lavender);
+  }
+  .filter-bar button[data-filter="all"].active {
+    background: var(--ctp-lavender);
+    color: var(--ctp-crust);
+  }
+
+  .filter-bar button[data-filter="watching"] {
+    color: var(--ctp-green);
+    border-color: var(--ctp-surface2);
+  }
+  .filter-bar button[data-filter="watching"]:hover,
+  .filter-bar button[data-filter="watching"].active {
+    border-color: var(--ctp-green);
+  }
+  .filter-bar button[data-filter="watching"].active {
+    background: var(--ctp-green);
+    color: var(--ctp-crust);
+  }
+
+  .filter-bar button[data-filter="to-watch"] {
+    color: var(--ctp-yellow);
+    border-color: var(--ctp-surface2);
+  }
+  .filter-bar button[data-filter="to-watch"]:hover,
+  .filter-bar button[data-filter="to-watch"].active {
+    border-color: var(--ctp-yellow);
+  }
+  .filter-bar button[data-filter="to-watch"].active {
+    background: var(--ctp-yellow);
+    color: var(--ctp-crust);
+  }
+
+  .filter-bar button[data-filter="watched"] {
+    color: var(--ctp-blue);
+    border-color: var(--ctp-surface2);
+  }
+  .filter-bar button[data-filter="watched"]:hover,
+  .filter-bar button[data-filter="watched"].active {
+    border-color: var(--ctp-blue);
+  }
+  .filter-bar button[data-filter="watched"].active {
+    background: var(--ctp-blue);
+    color: var(--ctp-crust);
+  }
+
+  .filter-bar button:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 var(--ctp-crust);
+  }
+
+  .filter-bar button:active {
+    transform: translate(1px, 1px);
+    box-shadow: 0 0 0;
+  }
+
+  /* ═══ Category nav ═══ */
+  .cat-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 16px 30px;
+    border-bottom: 2px dashed var(--ctp-surface1);
+  }
+
+  .cat-nav a {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--ctp-subtext0);
+    text-decoration: none;
+    padding: 6px 12px;
+    border: 2px solid var(--ctp-surface2);
+    border-radius: 2px;
+    background: var(--ctp-surface0);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      2px 2px 0 var(--ctp-crust);
+    transition: border-color 0.15s, color 0.15s, transform 0.1s;
+  }
+
+  .cat-nav a:hover {
+    color: var(--ctp-peach);
+    border-color: var(--ctp-peach);
+    transform: translate(-1px, -1px);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      3px 3px 0 var(--ctp-crust);
+  }
+
+  .cat-nav a:active {
+    transform: translate(1px, 1px);
+    box-shadow: 0 0 0;
+  }
+
+  /* ═══ Category sections ═══ */
+  .category {
+    padding: 24px 30px 12px;
+  }
+
+  .category h2 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 14px;
+    color: var(--ctp-peach);
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px dashed var(--ctp-surface1);
+    text-shadow: 2px 2px 0 var(--ctp-crust);
+  }
+
+  /* ═══ Tile grid ═══ */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px;
+  }
+
+  /* ═══ Tile ═══ */
+  .tile {
+    display: block;
+    text-decoration: none;
+    color: var(--ctp-text);
+    background: var(--ctp-base);
+    border: 3px solid var(--ctp-surface2);
+    border-radius: 4px;
+    overflow: hidden;
+    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    /* 90s beveled look */
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      3px 3px 0 var(--ctp-crust);
+  }
+
+  .tile:hover {
+    transform: translate(-2px, -2px);
+    border-color: var(--ctp-mauve);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-surface1),
+      inset -1px -1px 0 var(--ctp-crust),
+      5px 5px 0 var(--ctp-mauve);
+  }
+
+  .tile:active {
+    transform: translate(1px, 1px);
+    box-shadow:
+      inset 1px 1px 0 var(--ctp-crust),
+      inset -1px -1px 0 var(--ctp-surface1),
+      1px 1px 0 var(--ctp-crust);
+  }
+
+  .tile-thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    display: block;
+    border-bottom: 3px solid var(--ctp-surface2);
+    /* slight CRT color tint */
+    filter: saturate(1.1) contrast(1.05);
+  }
+
+  .tile-thumb-placeholder {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 32px;
+    border-bottom: 3px solid var(--ctp-surface2);
+  }
+
+  .tile-info {
+    padding: 10px 12px;
+  }
+
+  .tile-title {
+    font-size: 22px;
+    font-weight: bold;
+    color: var(--ctp-text);
+    line-height: 1.2;
+  }
+
+  .tile-channel {
+    font-size: 18px;
+    color: var(--ctp-overlay1);
+    margin-top: 2px;
+  }
+
+  .tile-badge {
+    display: inline-block;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 8px;
+    padding: 3px 6px;
+    margin-top: 6px;
+    color: var(--ctp-mauve);
+    border: 2px solid var(--ctp-mauve);
+    border-radius: 2px;
+  }
+
+  /* ═══ Footer ═══ */
+  footer {
+    text-align: center;
+    padding: 24px;
+    color: var(--ctp-overlay0);
+    font-size: 16px;
+    border-top: 2px dashed var(--ctp-surface0);
+    margin-top: 20px;
+  }
+
+  footer kbd {
+    background: var(--ctp-surface0);
+    border: 2px outset var(--ctp-surface2);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: var(--ctp-text);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📺 ZAPPING 📺</h1>
+  <p>// playlist launcher //</p>
+</header>
+
+<main id="app"></main>
+
+<script src="file:///home/liouk/.config/toolshed/zapping/playlists.js"></script>
+
+<script>
+// ═══ Rendering ═══
+
+const EMOJIS = ['📺', '🎙️', '🎧', '📡', '📻', '🖥️', '💾', '📼'];
+const FILTERS = [
+  { label: 'All', value: 'all' },
+  { label: 'Watching Now', value: 'watching' },
+  { label: 'Watchlist', value: 'to-watch' },
+  { label: 'Watched', value: 'watched' },
+];
+const hashFilter = location.hash.slice(1);
+let activeFilter = FILTERS.some(f => f.value === hashFilter) ? hashFilter : 'all';
+let searchQuery = '';
+
+function getPlaylistId(url) {
+  try {
+    return new URL(url).searchParams.get('list');
+  } catch { return null; }
+}
+
+function getThumbUrl(entry) {
+  if (entry.thumb) return entry.thumb;
+  const pid = getPlaylistId(entry.url);
+  if (pid) {
+    return `https://i.ytimg.com/vi/${pid}/hqdefault.jpg`;
+  }
+  return null;
+}
+
+function setFilter(value) {
+  activeFilter = value;
+  location.hash = value;
+  render();
+}
+
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+
+  const filterBar = document.createElement('div');
+  filterBar.className = 'filter-bar';
+
+  const countFor = value => PLAYLISTS.filter(p =>
+    value === 'all' || (p.status || 'to-watch') === value
+  ).length;
+
+  FILTERS.forEach(f => {
+    const btn = document.createElement('button');
+    btn.textContent = `${f.label} (${countFor(f.value)})`;
+    btn.dataset.filter = f.value;
+    if (f.value === activeFilter) btn.classList.add('active');
+    btn.onclick = () => setFilter(f.value);
+    filterBar.appendChild(btn);
+  });
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'search-input';
+  input.placeholder = 'Search...';
+  input.value = searchQuery;
+  input.oninput = (e) => {
+    searchQuery = e.target.value;
+    render();
+    const si = document.querySelector('.search-input');
+    if (si) { si.focus(); si.selectionStart = si.selectionEnd = si.value.length; }
+  };
+  filterBar.appendChild(input);
+
+  app.appendChild(filterBar);
+
+  const query = searchQuery.toLowerCase();
+  const filtered = PLAYLISTS.map((p, i) => ({ ...p, _index: i }))
+    .filter(p => activeFilter === 'all' || (p.status || 'to-watch') === activeFilter)
+    .filter(p => !query || p.title.toLowerCase().includes(query) || (p.channel || '').toLowerCase().includes(query));
+
+  const categories = {};
+  filtered.forEach(p => {
+    const cat = p.category || 'Uncategorized';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(p);
+  });
+
+  const catNames = Object.keys(categories);
+  if (catNames.length > 1) {
+    const nav = document.createElement('nav');
+    nav.className = 'cat-nav';
+    catNames.forEach(name => {
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const a = document.createElement('a');
+      a.href = `#cat-${slug}`;
+      a.textContent = name;
+      nav.appendChild(a);
+    });
+    app.appendChild(nav);
+  }
+
+  Object.entries(categories).forEach(([catName, items]) => {
+    const slug = catName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const section = document.createElement('section');
+    section.className = 'category';
+    section.id = `cat-${slug}`;
+    section.innerHTML = `<h2>&gt; ${catName} (${items.length})</h2>`;
+
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+
+    items.forEach(item => {
+      const emoji = EMOJIS[item._index % EMOJIS.length];
+      const thumbUrl = getThumbUrl(item);
+
+      const a = document.createElement('a');
+      a.className = 'tile';
+      a.href = item.url;
+      a.rel = 'noopener';
+
+      let thumbHtml;
+      if (thumbUrl) {
+        thumbHtml = `<img class="tile-thumb" src="${thumbUrl}"
+          onerror="this.outerHTML='<div class=\\'tile-thumb-placeholder\\' style=\\'background:var(--ctp-surface0)\\'>${emoji}</div>'"
+          alt="${item.title}" loading="lazy">`;
+      } else {
+        thumbHtml = `<div class="tile-thumb-placeholder" style="background:var(--ctp-surface0)">${emoji}</div>`;
+      }
+
+      a.innerHTML = `
+        ${thumbHtml}
+        <div class="tile-info">
+          <div class="tile-title">${item.title}</div>
+          ${item.channel ? `<div class="tile-channel">${item.channel}</div>` : ''}
+          <span class="tile-badge">${(item.status || 'to-watch').toUpperCase()}</span>
+        </div>
+      `;
+
+      grid.appendChild(a);
+    });
+
+    section.appendChild(grid);
+    app.appendChild(section);
+  });
+}
+
+render();
+</script>
+
+<footer>
+  <a class="github-link" href="https://github.com/liouk/zapping" target="_blank" rel="noopener">
+    <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: -2px; margin-right: 4px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    GitHub</a>
+</footer>
+</body>
+</html>
