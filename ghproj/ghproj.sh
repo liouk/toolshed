@@ -376,7 +376,7 @@ interactive_menu() {
         esac
       done
       menu_text+=$'\n'
-      menu_text+=$'\033[38;5;241m↑/↓ or j/k navigate · enter select · 1/2/3/a/l/v/p/q shortcuts\033[0m\n'
+      menu_text+=$'\033[38;5;241m↑/↓ or j/k navigate · enter select · a/c/r/x/l/v/p/q shortcuts\033[0m\n'
       printf '\033[H'
       printf '%s\n' "$menu_text"
 
@@ -391,8 +391,8 @@ interactive_menu() {
           ;;
         k) if (( index > 0 )); then index=$((index - 1)); fi ;;
         j) if (( index < ${#options[@]} - 1 )); then index=$((index + 1)); fi ;;
-        1|2|3|a|A|l|L|v|V|p|P|q|Q) MENU_CHOICE=$key; return ;;
-        $'\n'|$'\r') MENU_CHOICE=${options[index]:0:1}; return ;;
+        a|A|c|C|r|R|x|X|l|L|v|V|p|P|q|Q) MENU_CHOICE=$key; return ;;
+        ""|$'\n'|$'\r') MENU_CHOICE=${options[index]:0:1}; return ;;
       esac
     done
 }
