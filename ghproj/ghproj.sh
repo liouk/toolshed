@@ -325,6 +325,51 @@ clear_command() {
         "\(.id) \(.content.url)"')
 }
 
+show_clear_preview() {
+    local mode=$1 id repo number title url state match colored_state
+    CLEAR_IDS=()
+    CLEAR_COUNT=0
+    printf 'PRs to clear:\n'
+
+    while IFS=$'\t' read -r id repo number title url; do
+      if [ "$mode" = "all" ]; then
+        match=1
+        state=ALL
+      else
+        state=$(pr_state "$url")
+        case "$mode" in
+          closed)   [ "$state" = "CLOSED" ] && match=1 || match=0 ;;
+          merged)   [ "$state" = "MERGED" ] && match=1 || match=0 ;;
+          not-open) [ "$state" != "OPEN" ] && match=1 || match=0 ;;
+          *) echo "unknown mode: $mode" >&2; return 1 ;;
+        esac
+      fi
+      if [ "$match" = 1 ]; then
+        if [ "$state" = "ALL" ]; then
+          colored_state=$state
+        else
+          colored_state=$(status_label "$state")
+        fi
+        printf '  %-7s %s #%s  %s\n' "$colored_state" "$repo" "$number" "$title"
+        CLEAR_IDS+=("$id")
+        CLEAR_COUNT=$((CLEAR_COUNT + 1))
+      fi
+    done < <(items | jq -r '.items[] | select(.content.type=="PullRequest") |
+      [.id, .content.repository, .content.number, .content.title, .content.url] | @tsv')
+
+    if [ "$CLEAR_COUNT" -eq 0 ]; then
+      printf '  (nothing)\n'
+    fi
+}
+
+clear_interactive() {
+    local mode=$1 prompt=$2
+    show_clear_preview "$mode" || return 1
+    [ "$CLEAR_COUNT" -gt 0 ] || return 1
+    gum confirm "$prompt" || return 1
+    remove_items "${CLEAR_IDS[@]}"
+}
+
 open_url() {
     "${GHPROJ_BROWSER:-firefox}" "$1"
 }
@@ -413,17 +458,13 @@ case "${1:-}" in
         if add_command; then success_exit; fi
         ;;
       c|C)
-        if gum confirm "Clear all closed and merged PRs?"; then
-          if clear_command not-open; then success_exit; fi
-        fi
+        if clear_interactive not-open "Clear these non-open PRs?"; then success_exit; fi
         ;;
       r|R)
         if choose_remove_command; then success_exit; fi
         ;;
       x|X)
-        if gum confirm "Clear all PRs?"; then
-          if clear_command all; then success_exit; fi
-        fi
+        if clear_interactive all "Clear all listed PRs?"; then success_exit; fi
         ;;
       l|L) list_interactive_command ;;
       v|V) open_pulls_url ;;
