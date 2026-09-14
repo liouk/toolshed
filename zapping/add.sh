@@ -14,8 +14,7 @@ if ! command -v gum &>/dev/null; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLAYLISTS_FILE="$HOME/.config/toolshed/zapping/playlists.js"
-mkdir -p "$(dirname "$PLAYLISTS_FILE")"
+PLAYLISTS_FILE="$SCRIPT_DIR/playlists.js"
 
 # Catppuccin Mocha
 CTP_MAUVE="203"
