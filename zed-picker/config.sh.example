@@ -1,0 +1,19 @@
+# Copy this file to:
+#   ~/.config/toolshed/zed-picker/config.sh
+#
+# Plain paths are fixed entries.
+# A trailing :N searches a path to maximum depth N.
+# Paths containing *, ?, or [ are treated as fd globs. They can also
+# use a trailing :N to limit the search depth.
+
+ZED_PICKER_PATHS=(
+  "$HOME/Documents"
+  "$HOME/Downloads"
+
+  "$HOME/src:1"
+  "$HOME/projects:2"
+
+  # Matches directories such as:
+  #   ~/projects/example/feature.wt
+  "$HOME/projects/*/*.wt"
+)

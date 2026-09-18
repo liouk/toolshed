@@ -6,9 +6,7 @@ export _ZO_DATA_DIR="$config_dir"
 
 config_file="${ZED_PICKER_CONFIG_FILE:-$config_dir/config.sh}"
 
-ZED_PICKER_FIXED_PATHS=()
-ZED_PICKER_SEARCH_PATHS=()
-ZED_PICKER_WORKTREE_GLOBS=()
+ZED_PICKER_PATHS=()
 
 if [[ -r "$config_file" ]]; then
 	source "$config_file"
@@ -18,18 +16,52 @@ selected=$(
   {
     zoxide query --list 2>/dev/null
 
-	printf '%s\n' "${ZED_PICKER_FIXED_PATHS[@]}"
+	for ((i = 0; i < ${#ZED_PICKER_PATHS[@]}; i++)); do
+		entry="${ZED_PICKER_PATHS[i]}"
+		value="$entry"
+		max_depth=""
 
-	for search in "${ZED_PICKER_SEARCH_PATHS[@]}"; do
-		root="${search%:*}"
-		max_depth="${search##*:}"
-		fd --type d --no-ignore --max-depth "$max_depth" . "$root" 2>/dev/null
-	done
+		# A trailing :N limits either a search or a glob. Colons elsewhere
+		# are treated as part of the path.
+		if [[ "$value" =~ ^(.*):([0-9]+)$ ]]; then
+			value="${BASH_REMATCH[1]}"
+			max_depth="${BASH_REMATCH[2]}"
+		fi
 
-	for worktree_glob in "${ZED_PICKER_WORKTREE_GLOBS[@]}"; do
-		fd --type d --no-ignore --max-depth 1 . "$worktree_glob" 2>/dev/null
+		if [[ "$value" == *"*"* || "$value" == *"?"* || "$value" == *"["* ]]; then
+			# Search from the part before the first wildcard, while matching
+			# against the complete path. This keeps the glob constrained to
+			# its configured tree.
+			glob_prefix="$value"
+			for ((j = 0; j < ${#value}; j++)); do
+				character="${value:j:1}"
+				if [[ "$character" == "*" || "$character" == "?" || "$character" == "[" ]]; then
+					glob_prefix="${value:0:j}"
+					break
+				fi
+			done
+			glob_root="${glob_prefix%/*}"
+			[[ -n "$glob_root" ]] || glob_root="."
+
+			fd_args=(--type d --no-ignore --glob --full-path)
+			[[ -n "$max_depth" ]] && fd_args+=(--max-depth "$max_depth")
+			fd "${fd_args[@]}" "$value" "$glob_root" 2>/dev/null
+		elif [[ -n "$max_depth" ]]; then
+			fd --type d --no-ignore --max-depth "$max_depth" . "$value" 2>/dev/null
+		else
+			printf '%s\n' "$value"
+		fi
 	done
-  } | sed 's:/$::' | awk '!seen[$0]++' | fzf --prompt=":: zed :: " --height=40% --reverse
+	  } |
+		sed 's:/$::' |
+		awk -v home="$HOME" '{
+			display = $0
+			sub("^" home, "~", display)
+			print display "\t" $0
+		}' |
+		awk -F '\t' '!seen[$2]++' |
+		fzf --delimiter=$'\t' --with-nth=1 --accept-nth=2 \
+			--prompt=":: zed :: " --height=40% --reverse
 )
 
 if [[ -n "$selected" ]]; then
