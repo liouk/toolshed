@@ -36,6 +36,31 @@ Env (override the config file):
   PROJECT_NUMBER  project number, from its URL (…/projects/<N>)
   GHPROJ_BROWSER   browser executable for v/p shortcuts (default: firefox)
 
+GitHub authentication:
+
+`ghproj` uses the GitHub CLI for all GitHub operations. Authenticate `gh`
+once with a personal access token; the token is stored by `gh` and does not
+need to be exported globally:
+
+```bash
+printf 'GitHub PAT: ' >&2
+IFS= read -r -s GH_PAT
+printf '\n' >&2
+printf '%s' "$GH_PAT" | gh auth login --hostname github.com --with-token
+unset GH_PAT
+```
+
+For a classic personal access token, grant the `project` scope, plus `repo`
+and `read:org` if the project contains private or organization repositories.
+Check the stored credentials with:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+```
+
+Avoid exporting an unrelated `GH_TOKEN` or `GITHUB_TOKEN`: `gh` gives those
+environment variables precedence over its stored credentials.
+
 Config file (used when the env vars above aren't set):
   ~/.config/toolshed/ghproj/config.yaml
     owner: octocat

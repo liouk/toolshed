@@ -20,6 +20,32 @@ Requires:
 - Go 1.25+
 - [gh CLI](https://cli.github.com) (authenticated)
 
+## GitHub authentication
+
+`glone` uses the GitHub CLI for repository listing, cloning, forking, and
+browsing. Authenticate `gh` once with a GitHub personal access token; the
+token is stored by `gh` and does not need to be exported globally:
+
+```bash
+printf 'GitHub PAT: ' >&2
+IFS= read -r -s GH_PAT
+printf '\n' >&2
+printf '%s' "$GH_PAT" | gh auth login --hostname github.com --with-token
+unset GH_PAT
+```
+
+For a classic personal access token, grant `repo` and `read:org`; add the
+`project` scope if you use the same token with `ghproj` or `jira2gh`.
+
+Verify the stored credentials with:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+```
+
+Avoid exporting an unrelated `GH_TOKEN` or `GITHUB_TOKEN`: `gh` gives those
+environment variables precedence over its stored credentials.
+
 ## Config
 
 Create `~/.config/glone/config.yaml`:
