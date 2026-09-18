@@ -246,29 +246,33 @@ choose_remove_command() {
       return 0
     fi
 
-    local list_text=""
     for index in "${!rows[@]}"; do
       IFS=$'\t' read -r id repo number title url <<< "${rows[index]}"
       state=$(pr_state "$url" || echo UNKNOWN)
-      colored_state=$(status_label "$state")
-      list_text+=$(printf '[%d] %-7s %s #%s  %s' "$((index + 1))" "$colored_state" "$repo" "$number" "$title")
-      list_text+=$'\n'
+      choices+=("$(printf '[%d] %-7s %s #%s  %s' \
+        "$((index + 1))" "$state" "$repo" "$number" "$title")")
     done
 
-    gum style --no-strip-ansi --bold "Pull requests" "$list_text"
-    selection=$(gum input --prompt "❯ " \
-      --header "PRs to remove (comma-separated)" \
-      --placeholder "1,3,5") || return 1
-    IFS=',' read -ra choices <<< "$selection"
-    for choice in "${choices[@]}"; do
-      choice=${choice//[[:space:]]/}
-      if ! [[ $choice =~ ^[0-9]+$ ]]; then
+    if ! selection=$(printf '%s\n' "${choices[@]}" | gum filter \
+      --no-limit \
+      --header "PRs to remove" \
+      --placeholder "Filter PRs..." \
+      --height 15 \
+      --reverse); then
+      return 1
+    fi
+
+    while IFS= read -r choice; do
+      [ -z "$choice" ] && continue
+      if [[ $choice =~ ^\[([0-9]+)\] ]]; then
+        index=$((BASH_REMATCH[1] - 1))
+      else
         echo "invalid selection: $choice" >&2
         return 1
       fi
-      index=$((choice - 1))
+
       if [ "$index" -lt 0 ] || [ "$index" -ge "${#rows[@]}" ]; then
-        echo "selection out of range: $choice" >&2
+        echo "selection out of range: $((index + 1))" >&2
         return 1
       fi
       IFS=$'\t' read -r id repo number title url <<< "${rows[index]}"
@@ -276,9 +280,9 @@ choose_remove_command() {
         selected_ids+=("$id")
         seen[$id]=1
       fi
-    done
+    done <<< "$selection"
 
-    remove_items "${selected_ids[@]}"
+    [ "${#selected_ids[@]}" -gt 0 ] && remove_items "${selected_ids[@]}"
 }
 
 list_interactive_command() {
