@@ -65,16 +65,35 @@ func (d repoDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 }
 
 type repoPicker struct {
-	list         list.Model
-	filter       textinput.Model
-	allItems     []repoItem
-	orgItems     map[string][]repoItem
-	spinner      spinner.Model
-	loading      bool
-	refreshing   bool
-	loadingMsg   string
-	pendingFetch int
-	action       repoAction
+	list                list.Model
+	filter              textinput.Model
+	allItems            []repoItem
+	orgItems            map[string][]repoItem
+	spinner             spinner.Model
+	loading             bool
+	refreshing          bool
+	loadingMsg          string
+	cloneOutput         []string
+	cloneReadyMessage   string
+	cloneProgressActive bool
+	pendingFetch        int
+	action              repoAction
+}
+
+func (r *repoPicker) addCloneOutput(line string, replace bool) {
+	if line == "" {
+		return
+	}
+	const maxLines = 24
+	if r.cloneProgressActive && len(r.cloneOutput) > 0 {
+		r.cloneOutput[len(r.cloneOutput)-1] = line
+	} else {
+		r.cloneOutput = append(r.cloneOutput, line)
+		if len(r.cloneOutput) > maxLines {
+			r.cloneOutput = r.cloneOutput[len(r.cloneOutput)-maxLines:]
+		}
+	}
+	r.cloneProgressActive = replace
 }
 
 type repoAction struct {
@@ -198,11 +217,14 @@ func (r *repoPicker) applyFilter() {
 		return
 	}
 
-	var filtered []list.Item
-	for _, item := range r.allItems {
-		if fuzzyMatch(strings.ToLower(item.org+"/"+item.name), query) {
-			filtered = append(filtered, item)
-		}
+	targets := make([]string, len(r.allItems))
+	for i, item := range r.allItems {
+		targets[i] = strings.ToLower(item.FilterValue())
+	}
+	ranks := list.DefaultFilter(query, targets)
+	filtered := make([]list.Item, len(ranks))
+	for i, rank := range ranks {
+		filtered[i] = r.allItems[rank.Index]
 	}
 	r.list.SetItems(filtered)
 }
@@ -222,23 +244,24 @@ func (r *repoPicker) rebuildAllItems() {
 	r.applyFilter()
 }
 
-func fuzzyMatch(s, query string) bool {
-	qi := 0
-	for i := 0; i < len(s) && qi < len(query); i++ {
-		if s[i] == query[qi] {
-			qi++
-		}
-	}
-	return qi == len(query)
-}
-
 func (r repoPicker) View() string {
 	if r.loading {
 		msg := r.loadingMsg
 		if msg == "" {
 			msg = "Loading repos…"
 		}
-		return fmt.Sprintf("\n  %s %s", r.spinner.View(), msg)
+		view := fmt.Sprintf("\n  %s %s", r.spinner.View(), msg)
+		if len(r.cloneOutput) > 0 {
+			view += "\n\n  " + strings.Join(r.cloneOutput, "\n  ")
+		}
+		return view
+	}
+	if r.cloneReadyMessage != "" {
+		view := "\n  " + successStyle.Render("✓ "+r.cloneReadyMessage)
+		if len(r.cloneOutput) > 0 {
+			view += "\n\n  " + strings.Join(r.cloneOutput, "\n  ")
+		}
+		return view + "\n\n" + helpStyle.Render("  press enter to open • esc to quit")
 	}
 
 	var b strings.Builder

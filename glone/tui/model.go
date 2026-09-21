@@ -40,6 +40,11 @@ type cloneDoneMsg struct {
 	openEditor bool
 }
 
+type cloneOutputMsg struct {
+	line    string
+	replace bool
+}
+
 type editorOpenedMsg struct {
 	path    string
 	message string
@@ -54,13 +59,16 @@ type Org struct {
 }
 
 type Model struct {
-	screen     screen
-	repoPicker repoPicker
-	result     resultScreen
-	orgs       []Org
-	editor     string
-	quitting   bool
-	resultText string
+	screen          screen
+	repoPicker      repoPicker
+	result          resultScreen
+	orgs            []Org
+	editor          string
+	quitting        bool
+	resultText      string
+	cloneEvents     <-chan tea.Msg
+	pendingOpenPath string
+	pendingOpenRepo string
 }
 
 func New(orgs []Org, editor string) Model {
@@ -93,6 +101,20 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.pendingOpenPath != "" && msg.String() != "esc" && msg.String() != "ctrl+c" {
+			if msg.String() == "enter" {
+				path := m.pendingOpenPath
+				repoName := m.pendingOpenRepo
+				m.pendingOpenPath = ""
+				m.pendingOpenRepo = ""
+				m.repoPicker.cloneReadyMessage = ""
+				m.repoPicker.cloneOutput = nil
+				m.repoPicker.loading = true
+				m.repoPicker.loadingMsg = fmt.Sprintf("Opening %s…", repoName)
+				return m, m.openEditor(repoItem{name: repoName}, path)
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
@@ -112,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.repoPicker.orgItems[msg.org] = msg.repos
 			m.repoPicker.rebuildAllItems()
 		}
-		if len(m.repoPicker.allItems) > 0 {
+		if len(m.repoPicker.allItems) > 0 && m.repoPicker.loadingMsg == "" {
 			m.repoPicker.loading = false
 			m.repoPicker.refreshing = m.repoPicker.pendingFetch > 0
 		}
@@ -122,12 +144,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repoPicker.pendingFetch--
 		m.repoPicker.orgItems[msg.org] = msg.repos
 		m.repoPicker.rebuildAllItems()
-		m.repoPicker.loading = false
-		m.repoPicker.refreshing = m.repoPicker.pendingFetch > 0
+		if m.repoPicker.loadingMsg == "" {
+			m.repoPicker.loading = false
+			m.repoPicker.refreshing = m.repoPicker.pendingFetch > 0
+		}
 		return m, nil
 
 	case reposErrorMsg:
 		m.repoPicker.pendingFetch--
+		if m.repoPicker.loadingMsg != "" {
+			return m, nil
+		}
 		if len(m.repoPicker.allItems) > 0 || m.repoPicker.pendingFetch > 0 {
 			m.repoPicker.refreshing = m.repoPicker.pendingFetch > 0
 			return m, nil
@@ -138,6 +165,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case cloneDoneMsg:
+		m.cloneEvents = nil
 		if msg.err != nil {
 			m.screen = screenResult
 			var cmd tea.Cmd
@@ -145,13 +173,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if msg.openEditor && m.editor != "" {
-			return m, m.openEditor(repoItem{name: msg.repoName}, msg.path)
+			m.repoPicker.loading = false
+			m.repoPicker.loadingMsg = ""
+			m.repoPicker.cloneReadyMessage = msg.message
+			m.pendingOpenPath = msg.path
+			m.pendingOpenRepo = msg.repoName
+			return m, nil
 		}
 		m.screen = screenResult
 		m.resultText = msg.path
 		var cmd tea.Cmd
 		m.result, cmd = newResult(msg.message, false)
 		return m, cmd
+
+	case cloneOutputMsg:
+		m.repoPicker.addCloneOutput(msg.line, msg.replace)
+		if m.cloneEvents != nil {
+			return m, waitForCloneEvent(m.cloneEvents)
+		}
+		return m, nil
 
 	case editorOpenedMsg:
 		if msg.err != nil {
@@ -195,9 +235,14 @@ func (m Model) updateRepo(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case actionDeepClone, actionShallowClone:
 			m.repoPicker.loading = true
 			m.repoPicker.loadingMsg = fmt.Sprintf("Cloning %s…", action.item.name)
+			m.repoPicker.cloneOutput = nil
+			m.repoPicker.cloneProgressActive = false
+			events := make(chan tea.Msg, 64)
+			m.cloneEvents = events
 			return m, tea.Batch(
 				m.repoPicker.spinner.Tick,
-				m.doClone(action),
+				m.doClone(action, events),
+				waitForCloneEvent(events),
 			)
 		case actionOpen:
 			return m, m.openEditor(action.item, "")
@@ -335,24 +380,38 @@ func (m Model) cloneDirFor(item repoItem) string {
 	return resolveCloneDir(org.CloneDir, org.ForkCloneDirs, item.parentOrg)
 }
 
-func (m Model) doClone(action repoAction) tea.Cmd {
+func (m Model) doClone(action repoAction, events chan<- tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		shallow := action.kind == actionShallowClone
-		dir := m.cloneDirFor(action.item)
-		path, err := cloneRepoCmd(action.item.url, dir, action.item.name, shallow)
-		if err != nil {
-			return cloneDoneMsg{err: err}
-		}
-		kind := "cloned"
-		if shallow {
-			kind = "shallow cloned"
-		}
-		return cloneDoneMsg{
-			path:       path,
-			repoName:   action.item.name,
-			message:    fmt.Sprintf("%s to %s", kind, path),
-			openEditor: true,
-		}
+		go func() {
+			defer close(events)
+
+			shallow := action.kind == actionShallowClone
+			dir := m.cloneDirFor(action.item)
+			path, err := cloneRepoCmd(action.item.url, dir, action.item.name, shallow, func(line string, replace bool) {
+				events <- cloneOutputMsg{line: line, replace: replace}
+			})
+			if err != nil {
+				events <- cloneDoneMsg{err: err}
+				return
+			}
+			kind := "cloned"
+			if shallow {
+				kind = "shallow cloned"
+			}
+			events <- cloneDoneMsg{
+				path:       path,
+				repoName:   action.item.name,
+				message:    fmt.Sprintf("%s to %s", kind, path),
+				openEditor: true,
+			}
+		}()
+		return nil
+	}
+}
+
+func waitForCloneEvent(events <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		return <-events
 	}
 }
 
@@ -392,7 +451,7 @@ func (m Model) doFork(item repoItem) tea.Cmd {
 
 		// clone the fork
 		forkURL := fmt.Sprintf("git@github.com:%s/%s.git", ghUser, item.name)
-		path, err := cloneRepoCmd(forkURL, cloneDir, item.name, false)
+		path, err := cloneRepoCmd(forkURL, cloneDir, item.name, false, nil)
 		if err != nil {
 			return cloneDoneMsg{err: err}
 		}

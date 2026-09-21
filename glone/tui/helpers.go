@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 func jsonUnmarshal(data []byte, v any) error {
@@ -14,20 +17,14 @@ func jsonUnmarshal(data []byte, v any) error {
 }
 
 func isRepoCloned(cloneDir, name string) bool {
-	dest := filepath.Join(cloneDir, name)
-	info, err := os.Stat(dest)
-	return err == nil && info.IsDir()
+	// A leftover directory from an interrupted clone must remain cloneable.
+	// Normal repositories use a .git directory, while linked worktrees use a
+	// .git file that points at their shared Git directory.
+	_, err := os.Lstat(filepath.Join(cloneDir, name, ".git"))
+	return err == nil
 }
 
-func httpsToSSH(url string) string {
-	url = strings.TrimSuffix(url, ".git")
-	if after, ok := strings.CutPrefix(url, "https://github.com/"); ok {
-		return "git@github.com:" + after + ".git"
-	}
-	return url
-}
-
-func cloneRepoCmd(url, cloneDir, name string, shallow bool) (string, error) {
+func cloneRepoCmd(url, cloneDir, name string, shallow bool, report func(string, bool)) (string, error) {
 	dest := filepath.Join(cloneDir, name)
 
 	if _, err := os.Stat(dest); err == nil {
@@ -38,17 +35,77 @@ func cloneRepoCmd(url, cloneDir, name string, shallow bool) (string, error) {
 		return "", fmt.Errorf("could not create directory: %w", err)
 	}
 
-	args := []string{"clone"}
+	// Keep GitHub's HTTPS URL intact. Rewriting it to SSH makes cloning depend
+	// on a local SSH setup even though glone already requires authenticated gh.
+	args := []string{"repo", "clone", url, dest}
+	gitArgs := []string{"--progress"}
 	if shallow {
-		args = append(args, "--depth", "1")
+		gitArgs = append(gitArgs, "--depth=1")
 	}
-	args = append(args, httpsToSSH(url), dest)
+	args = append(args, "--")
+	args = append(args, gitArgs...)
 
-	cmd := exec.Command("git", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git clone failed: %s", string(out))
+	cmd := exec.Command("gh", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("could not capture clone output: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("could not capture clone errors: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("could not start gh repo clone: %w", err)
+	}
+
+	var output []string
+	var outputMu sync.Mutex
+	var readers sync.WaitGroup
+	readOutput := func(reader io.Reader) {
+		defer readers.Done()
+		scanner := bufio.NewScanner(reader)
+		scanner.Split(splitProgressLines)
+		buffer := make([]byte, 64*1024)
+		scanner.Buffer(buffer, 1024*1024)
+		for scanner.Scan() {
+			raw := scanner.Text()
+			replace := strings.HasSuffix(raw, "\r")
+			line := strings.TrimRight(raw, "\r\n")
+			outputMu.Lock()
+			output = append(output, line)
+			outputMu.Unlock()
+			if report != nil {
+				report(line, replace)
+			}
+		}
+	}
+	readers.Add(2)
+	go readOutput(stdout)
+	go readOutput(stderr)
+
+	err = cmd.Wait()
+	readers.Wait()
+	if err != nil {
+		// git creates its destination before contacting the remote. Remove that
+		// incomplete checkout so a subsequent attempt is allowed to clone.
+		if removeErr := os.RemoveAll(dest); removeErr != nil {
+			return "", fmt.Errorf("gh repo clone failed: %s (also could not remove incomplete checkout: %w)", strings.Join(output, "\n"), removeErr)
+		}
+		return "", fmt.Errorf("gh repo clone failed: %s", strings.Join(output, "\n"))
 	}
 	return dest, nil
+}
+
+func splitProgressLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			return i + 1, data[:i+1], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 type cachedRepo struct {

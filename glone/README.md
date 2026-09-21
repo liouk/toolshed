@@ -23,7 +23,8 @@ Requires:
 ## GitHub authentication
 
 `glone` uses the GitHub CLI for repository listing, cloning, forking, and
-browsing. Authenticate `gh` once with a GitHub personal access token; the
+browsing. Clones use each repository's HTTPS URL, so they do not require SSH
+configuration. Authenticate `gh` once with a GitHub personal access token; the
 token is stored by `gh` and does not need to be exported globally:
 
 ```bash
@@ -48,7 +49,7 @@ environment variables precedence over its stored credentials.
 
 ## Config
 
-Create `~/.config/glone/config.yaml`:
+Create `~/.config/toolshed/glone/config.yaml`:
 
 ```yaml
 editor: code                             # optional; auto-opens repos after clone
@@ -93,6 +94,7 @@ If multiple orgs are configured, you'll first pick one (press `1`-`9`/`0` to qui
 | `esc` / `ctrl+c` | Quit |
 
 Already-cloned repos are marked with ✓ and `enter` opens them in the configured `editor`. After cloning, the repo auto-opens in the editor if configured; otherwise the path is printed to stdout.
+While a clone runs, glone shows the most recent 24 lines of clone output below its progress indicator.
 
 `ctrl+f` forks the selected repo under your GitHub user, clones the fork (using `fork_clone_dirs` to pick the destination), and opens it. Requires a matching org entry in your config for your GitHub username.
 
