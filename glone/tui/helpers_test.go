@@ -47,3 +47,12 @@ func TestSplitProgressLines(t *testing.T) {
 		t.Fatalf("token = %q", token)
 	}
 }
+
+func TestGitHubURLToSSH(t *testing.T) {
+	if got := githubURLToSSH("https://github.com/openshift/origin"); got != "git@github.com:openshift/origin.git" {
+		t.Fatalf("GitHub HTTPS URL became %q", got)
+	}
+	if got := githubURLToSSH("git@gitlab.example:team/repository.git"); got != "git@gitlab.example:team/repository.git" {
+		t.Fatalf("non-GitHub URL changed to %q", got)
+	}
+}

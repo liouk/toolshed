@@ -24,6 +24,14 @@ func isRepoCloned(cloneDir, name string) bool {
 	return err == nil
 }
 
+func githubURLToSSH(url string) string {
+	if path, ok := strings.CutPrefix(url, "https://github.com/"); ok {
+		path = strings.TrimSuffix(path, ".git")
+		return "git@github.com:" + path + ".git"
+	}
+	return url
+}
+
 func cloneRepoCmd(url, cloneDir, name string, shallow bool, report func(string, bool)) (string, error) {
 	dest := filepath.Join(cloneDir, name)
 
@@ -35,9 +43,7 @@ func cloneRepoCmd(url, cloneDir, name string, shallow bool, report func(string, 
 		return "", fmt.Errorf("could not create directory: %w", err)
 	}
 
-	// Keep GitHub's HTTPS URL intact. Rewriting it to SSH makes cloning depend
-	// on a local SSH setup even though glone already requires authenticated gh.
-	args := []string{"repo", "clone", url, dest}
+	args := []string{"repo", "clone", githubURLToSSH(url), dest}
 	gitArgs := []string{"--progress"}
 	if shallow {
 		gitArgs = append(gitArgs, "--depth=1")

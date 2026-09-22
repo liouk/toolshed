@@ -23,8 +23,8 @@ Requires:
 ## GitHub authentication
 
 `glone` uses the GitHub CLI for repository listing, cloning, forking, and
-browsing. Clones use each repository's HTTPS URL, so they do not require SSH
-configuration. Authenticate `gh` once with a GitHub personal access token; the
+browsing. Clones use SSH remotes, so ensure your GitHub SSH key is configured.
+Authenticate `gh` once with a GitHub personal access token; the
 token is stored by `gh` and does not need to be exported globally:
 
 ```bash
