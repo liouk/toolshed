@@ -8,27 +8,31 @@ import (
 )
 
 type orgEntry struct {
-	Name          string
-	CloneDir      string
-	ForkCloneDirs map[string]string
-	Exclude       map[string]bool
+	Name                string
+	CloneDir            string
+	WorktreeDirTemplate string
+	ForkCloneDirs       map[string]string
+	Exclude             map[string]bool
 }
 
 type config struct {
-	Orgs   []orgEntry
-	Editor string
+	Orgs                []orgEntry
+	Editor              string
+	WorktreeDirTemplate string
 }
 
 type rawConfig struct {
-	Orgs   []yaml.Node `yaml:"orgs"`
-	Editor string      `yaml:"editor"`
+	Orgs                []yaml.Node `yaml:"orgs"`
+	Editor              string      `yaml:"editor"`
+	WorktreeDirTemplate string      `yaml:"worktree_dir_template"`
 }
 
 type rawOrgObj struct {
-	Name          string            `yaml:"name"`
-	CloneDir      string            `yaml:"clone_dir"`
-	ForkCloneDirs map[string]string `yaml:"fork_clone_dirs"`
-	Exclude       []string          `yaml:"exclude"`
+	Name                string            `yaml:"name"`
+	CloneDir            string            `yaml:"clone_dir"`
+	WorktreeDirTemplate string            `yaml:"worktree_dir_template"`
+	ForkCloneDirs       map[string]string `yaml:"fork_clone_dirs"`
+	Exclude             []string          `yaml:"exclude"`
 }
 
 func loadConfig() (*config, error) {
@@ -52,7 +56,7 @@ func loadConfig() (*config, error) {
 		return nil, fmt.Errorf("no orgs configured in %s", path)
 	}
 
-	cfg := config{Editor: raw.Editor}
+	cfg := config{Editor: raw.Editor, WorktreeDirTemplate: raw.WorktreeDirTemplate}
 	for _, node := range raw.Orgs {
 		switch node.Kind {
 		case yaml.MappingNode:
@@ -83,10 +87,11 @@ func loadConfig() (*config, error) {
 				exclude[name] = true
 			}
 			cfg.Orgs = append(cfg.Orgs, orgEntry{
-				Name:          obj.Name,
-				CloneDir:      cloneDir,
-				ForkCloneDirs: forkCloneDirs,
-				Exclude:       exclude,
+				Name:                obj.Name,
+				CloneDir:            cloneDir,
+				WorktreeDirTemplate: obj.WorktreeDirTemplate,
+				ForkCloneDirs:       forkCloneDirs,
+				Exclude:             exclude,
 			})
 		default:
 			return nil, fmt.Errorf("org entries must be objects with 'name' and 'clone_dir' in %s", path)

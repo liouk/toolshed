@@ -23,7 +23,17 @@ func main() {
 
 	orgs := make([]tui.Org, len(cfg.Orgs))
 	for i, o := range cfg.Orgs {
-		orgs[i] = tui.Org{Name: o.Name, CloneDir: o.CloneDir, ForkCloneDirs: o.ForkCloneDirs, Exclude: o.Exclude}
+		worktreeDirTemplate := o.WorktreeDirTemplate
+		if worktreeDirTemplate == "" {
+			worktreeDirTemplate = cfg.WorktreeDirTemplate
+		}
+		orgs[i] = tui.Org{
+			Name:                o.Name,
+			CloneDir:            o.CloneDir,
+			WorktreeDirTemplate: worktreeDirTemplate,
+			ForkCloneDirs:       o.ForkCloneDirs,
+			Exclude:             o.Exclude,
+		}
 	}
 
 	p := tea.NewProgram(tui.New(orgs, cfg.Editor), tea.WithAltScreen())

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,76 @@ func TestRefreshDoesNotDismissCloneLoadingState(t *testing.T) {
 	}
 	if got.repoPicker.loadingMsg != "Cloning origin…" {
 		t.Fatalf("clone loading message changed: %q", got.repoPicker.loadingMsg)
+	}
+}
+
+func TestPullRequestActionPromptsToCloneAnUnclonedRepository(t *testing.T) {
+	m := New([]Org{{Name: "example", CloneDir: "/tmp"}}, "zed")
+	item := repoItem{org: "example", name: "project"}
+	m.repoPicker.action = repoAction{kind: actionPullRequests, item: item}
+
+	updated, _ := m.updateRepo(nil)
+	got := updated.(Model)
+	if got.screen != screenCloneForPR {
+		t.Fatalf("screen = %v, want clone confirmation", got.screen)
+	}
+	if got.prRepo != item {
+		t.Fatalf("PR repository = %#v, want %#v", got.prRepo, item)
+	}
+	view := got.View()
+	if !strings.Contains(view, "Do you want to clone it first? [Y/n]") || !strings.Contains(view, "y/enter clone first") || !strings.Contains(view, "n/q/esc/ctrl-c quit") {
+		t.Fatalf("unexpected clone confirmation: %q", view)
+	}
+}
+
+func TestCloneForPullRequestsOpensThePRPicker(t *testing.T) {
+	m := New(nil, "zed")
+	item := repoItem{org: "example", name: "project"}
+	updated, cmd := m.Update(cloneDoneMsg{path: "/tmp/project", item: item, loadPulls: true})
+	got := updated.(Model)
+	if cmd == nil {
+		t.Fatal("PR clone completion did not load pull requests")
+	}
+	if got.screen != screenPullRequests {
+		t.Fatalf("screen = %v, want PR picker", got.screen)
+	}
+	if !got.prRepo.cloned {
+		t.Fatal("PR repository was not marked cloned")
+	}
+}
+
+func TestOpenPromptNamesConfiguredEditor(t *testing.T) {
+	m := New(nil, "zed")
+	updated, _ := m.Update(cloneDoneMsg{path: "/tmp/project", repoName: "project", openEditor: true})
+	got := updated.(Model)
+	if !strings.Contains(got.View(), "press enter to open in zed") {
+		t.Fatalf("open prompt = %q", got.View())
+	}
+}
+
+func TestWorktreeDirTemplate(t *testing.T) {
+	m := New([]Org{{
+		Name:                "example",
+		CloneDir:            "/src/example",
+		WorktreeDirTemplate: "{{.clone_dir}}/.worktrees/{{.repo}}/pr-{{.pr_num}}",
+	}}, "zed")
+	dir, err := m.worktreeDirFor(repoItem{org: "example", name: "project"}, prItem{number: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/src/example/.worktrees/project/pr-42"; dir != want {
+		t.Fatalf("worktree directory = %q, want %q", dir, want)
+	}
+}
+
+func TestDefaultWorktreeDirTemplate(t *testing.T) {
+	m := New([]Org{{Name: "example", CloneDir: "/src/example"}}, "zed")
+	dir, err := m.worktreeDirFor(repoItem{org: "example", name: "project"}, prItem{number: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/src/example/project.wt/pr-42"; dir != want {
+		t.Fatalf("worktree directory = %q, want %q", dir, want)
 	}
 }
 

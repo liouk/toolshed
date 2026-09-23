@@ -74,7 +74,6 @@ type repoPicker struct {
 	refreshing          bool
 	loadingMsg          string
 	cloneOutput         []string
-	cloneReadyMessage   string
 	cloneProgressActive bool
 	pendingFetch        int
 	action              repoAction
@@ -97,8 +96,9 @@ func (r *repoPicker) addCloneOutput(line string, replace bool) {
 }
 
 type repoAction struct {
-	kind actionKind
-	item repoItem
+	kind      actionKind
+	item      repoItem
+	loadPulls bool
 }
 
 type actionKind int
@@ -110,6 +110,7 @@ const (
 	actionBrowser
 	actionOpen
 	actionFork
+	actionPullRequests
 )
 
 func newRepoPicker() repoPicker {
@@ -172,6 +173,13 @@ func (r repoPicker) Update(msg tea.Msg) (repoPicker, tea.Cmd) {
 				break
 			}
 			r.action = repoAction{kind: actionBrowser, item: item}
+			return r, nil
+		case "ctrl+w":
+			item, ok := r.list.SelectedItem().(repoItem)
+			if !ok {
+				break
+			}
+			r.action = repoAction{kind: actionPullRequests, item: item}
 			return r, nil
 		case "up", "ctrl+p":
 			r.list, _ = r.list.Update(msg)
@@ -256,14 +264,6 @@ func (r repoPicker) View() string {
 		}
 		return view
 	}
-	if r.cloneReadyMessage != "" {
-		view := "\n  " + successStyle.Render("✓ "+r.cloneReadyMessage)
-		if len(r.cloneOutput) > 0 {
-			view += "\n\n  " + strings.Join(r.cloneOutput, "\n  ")
-		}
-		return view + "\n\n" + helpStyle.Render("  press enter to open • esc to quit")
-	}
-
 	var b strings.Builder
 	b.WriteString(r.filter.View())
 	if r.refreshing {
@@ -275,7 +275,7 @@ func (r repoPicker) View() string {
 	b.WriteString(r.list.View())
 	b.WriteString("\n")
 
-	help := "  enter open/clone • ctrl+enter shallow clone • ctrl+f fork • ctrl+o browser • esc quit"
+	help := "  enter open/clone • ctrl+enter shallow clone • ctrl+w PR worktree • ctrl+f fork • ctrl+o browser • esc quit"
 	b.WriteString(helpStyle.Render(help))
 	return b.String()
 }
