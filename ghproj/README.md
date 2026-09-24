@@ -1,80 +1,41 @@
 # ghproj
 
-```
-ghproj — manage PRs in a GitHub Project (v2) via `gh`
+`ghproj` manages pull requests in one or more GitHub Projects (v2).
 
-Usage:
-  ghproj        interactive mode via `gum`
-  ghproj list
-  ghproj add    [pr-reference]
-  ghproj remove <pr-reference>
-  ghproj clear  [closed|merged|not-open|all]
-  ghproj config <owner> <number> [view-id]
-  ghproj help
-
-pr-reference (any of):
-  https://github.com/owner/repo/pull/372
-  owner/repo#372
-  owner/repo 372
-  owner repo 372
-  omit it on `add` to be prompted interactively
-
-Commands:
-  list           show every PR item currently in the project
-  add            add a PR to the project (prompts if none given)
-  remove         remove one PR from the project
-  clear [mode]   bulk-remove PR items by state (default: not-open):
-                   closed     state == CLOSED (closed without merging)
-                   merged     state == MERGED
-                   not-open   state != OPEN (closed or merged)
-                   all        every PR item, regardless of state
-  config         save owner/number/view-id to the config file (see below)
-  help           show this message
-
-Env (override the config file):
-  PROJECT_OWNER   user or org login that owns the project (e.g. "octocat")
-  PROJECT_NUMBER  project number, from its URL (…/projects/<N>)
-  GHPROJ_BROWSER   browser executable for v/p shortcuts (default: firefox)
-
-GitHub authentication:
-
-`ghproj` uses the GitHub CLI for all GitHub operations. Authenticate `gh`
-once with a personal access token; the token is stored by `gh` and does not
-need to be exported globally:
-
-```bash
-printf 'GitHub PAT: ' >&2
-IFS= read -r -s GH_PAT
-printf '\n' >&2
-printf '%s' "$GH_PAT" | gh auth login --hostname github.com --with-token
-unset GH_PAT
+```text
+ghproj
+ghproj list
+ghproj add [pr-reference]
+ghproj config <owner> <project> [view-url]
+ghproj config add <project> [view-url]
+ghproj config remove <project>
 ```
 
-For a classic personal access token, grant the `project` scope, plus `repo`
-and `read:org` if the project contains private or organization repositories.
-Check the stored credentials with:
+Configure projects in `~/.config/toolshed/ghproj/config.yaml`:
 
-```bash
-env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+```yaml
+owner: my-org
+projects:
+  - project: 5
+    view_url: https://github.com/pulls/SSC_kgDOACmseA
+  - project: 6
 ```
 
-Avoid exporting an unrelated `GH_TOKEN` or `GITHUB_TOKEN`: `gh` gives those
-environment variables precedence over its stored credentials.
+The interactive UI displays the configured projects at the top. Press `Tab` or
+`Shift+Tab` to choose one; all menu actions apply to that selected project.
 
-Config file (used when the env vars above aren't set):
-  ~/.config/toolshed/ghproj/config.yaml
-    owner: octocat
-    number: 5
-    view_id: 2688867
-  Write it with: ghproj config <owner> <number> [view-id]
+| Key | Action |
+| --- | --- |
+| `a` / `A` | Add one PR / paste multiple PR links |
+| `c` | Clear closed and merged PRs |
+| `r` | Select PRs to remove |
+| `x` | Clear all PRs |
+| `l` | List PRs |
+| `v` / `p` | Open the PR view / project page |
+| `m` | Move selected PRs to another configured project |
+| `q`, `esc`, `ctrl-c` | Quit |
 
-When launched interactively without a config file or project environment
-variables, ghproj prompts for the owner and project number, plus an optional
-pull-request view ID, then saves the values to the config file.
+Multiple pasted PR links may be comma-, space-, or newline-separated. Moving a
+PR adds it to the destination before removing it from the selected source.
 
-Requires:
-  gh: authenticated, with `project` scope
-  jq: for parsing gh responses
-  gum: for the interactive prompts and menu
-  wl-paste: for checking clipboard for an already pasted PR string
-```
+Requires authenticated `gh`, `jq`, and `gum` for interactive use.
