@@ -9,7 +9,7 @@ Usage:
   ghproj add    [pr-reference]
   ghproj remove <pr-reference>
   ghproj clear  [closed|merged|not-open|all]
-  ghproj config <owner> <number> [view-id]
+  ghproj config <owner> <number> [view-id] [secondary-project-number]
   ghproj help
 
 pr-reference (any of):
@@ -64,13 +64,26 @@ environment variables precedence over its stored credentials.
 Config file (used when the env vars above aren't set):
   ~/.config/toolshed/ghproj/config.yaml
     owner: octocat
-    number: 5
+    project: 5
     view_id: 2688867
-  Write it with: ghproj config <owner> <number> [view-id]
+    secondary_project: 6
+  Write it with: ghproj config <owner> <number> [view-id] [secondary-project-number]
 
 When launched interactively without a config file or project environment
 variables, ghproj prompts for the owner and project number, plus an optional
 pull-request view ID, then saves the values to the config file.
+
+In the interactive menu, press `A` to paste multiple PR links into the current
+project with a multiline text box. Links may be separated by commas, spaces, or
+newlines. Press `t` or `T` to add one or multiple PRs directly to the configured
+secondary project.
+
+Press `m` to move selected PRs to another project. Set `secondary_project` in
+the config file to use that project without being prompted; its name is shown in
+the menu when it can be resolved.
+
+In the secondary-project section, `R` removes selected PRs and `X` clears all
+PRs from that project.
 
 Requires:
   gh: authenticated, with `project` scope

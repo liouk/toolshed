@@ -6,18 +6,20 @@ CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/toolshed/ghproj/config.yaml"
 
 load_config() {
   [ -f "$CONFIG_FILE" ] || return 0
-  local o n v
+  local o n v m
   o=$(sed -n 's/^owner:[[:space:]]*//p' "$CONFIG_FILE" | head -n1)
-  n=$(sed -n 's/^number:[[:space:]]*//p' "$CONFIG_FILE" | head -n1)
+  n=$(sed -n 's/^project:[[:space:]]*//p' "$CONFIG_FILE" | head -n1)
   v=$(sed -n 's/^view_id:[[:space:]]*//p' "$CONFIG_FILE" | head -n1)
+  m=$(sed -n 's/^secondary_project:[[:space:]]*//p' "$CONFIG_FILE" | head -n1)
   : "${PROJECT_OWNER:=$o}"
   : "${PROJECT_NUMBER:=$n}"
   : "${PROJECT_VIEW_ID:=$v}"
+  : "${SECONDARY_PROJECT_NUMBER:=$m}"
 }
 
 save_config() {
   mkdir -p "$(dirname "$CONFIG_FILE")"
-  printf 'owner: %s\nnumber: %s\nview_id: %s\n' "$1" "$2" "${3:-}" > "$CONFIG_FILE"
+  printf 'owner: %s\nproject: %s\nview_id: %s\nsecondary_project: %s\n' "$1" "$2" "${3:-}" "${4:-}" > "$CONFIG_FILE"
 }
 
 # parse_pr accepts a PR reference in any of these forms and sets REPO/NUM,
@@ -53,7 +55,7 @@ Usage:
   ghproj add    [pr-reference]
   ghproj remove <pr-reference>
   ghproj clear  [closed|merged|not-open|all]
-  ghproj config <owner> <number> [view-id]
+  ghproj config <owner> <number> [view-id] [secondary-project-number]
   ghproj help
 
 pr-reference (any of):
@@ -78,14 +80,16 @@ Commands:
 Env (override the config file):
   PROJECT_OWNER   user or org login that owns the project (e.g. "octocat")
   PROJECT_NUMBER  project number, from its URL (…/projects/<N>)
+  SECONDARY_PROJECT_NUMBER  default secondary project for adding or moving PRs
   GHPROJ_BROWSER   browser executable for v/p shortcuts (default: firefox)
 
 Config file (used when the env vars above aren't set):
   ~/.config/toolshed/ghproj/config.yaml
     owner: octocat
-    number: 5
+    project: 5
     view_id: 2688867
-  Write it with: ghproj config <owner> <number> [view-id]
+    secondary_project: 6
+  Write it with: ghproj config <owner> <number> [view-id] [secondary-project-number]
 
 Requires:
   gh: authenticated, with `project` scope
@@ -101,10 +105,11 @@ case "${1:-}" in
     exit 0
     ;;
   config)
-    owner=${2:?usage: ghproj config <owner> <number> [view-id]}
-    number=${3:?usage: ghproj config <owner> <number> [view-id]}
+    owner=${2:?usage: ghproj config <owner> <number> [view-id] [secondary-project-number]}
+    number=${3:?usage: ghproj config <owner> <number> [view-id] [secondary-project-number]}
     view_id=${4:-}
-    save_config "$owner" "$number" "$view_id"
+    secondary_project=${5:-}
+    save_config "$owner" "$number" "$view_id" "$secondary_project"
     echo "saved to $CONFIG_FILE"
     exit 0
     ;;
@@ -130,7 +135,7 @@ if [ -z "${1:-}" ]; then
     PROJECT_VIEW_ID=$(gum input --value "${PROJECT_VIEW_ID:-}" \
       --header "Pull-request view ID (optional)" --header.foreground 255 \
       --prompt "❯ " --placeholder "" --cursor.mode blink) || exit 0
-    save_config "$PROJECT_OWNER" "$PROJECT_NUMBER" "${PROJECT_VIEW_ID:-}"
+    save_config "$PROJECT_OWNER" "$PROJECT_NUMBER" "${PROJECT_VIEW_ID:-}" "${SECONDARY_PROJECT_NUMBER:-}"
   fi
 fi
 : "${PROJECT_OWNER:?set PROJECT_OWNER or run: ghproj config <owner> <number>}"
@@ -177,6 +182,13 @@ project_name() {
   echo "$PROJECT_NAME"
 }
 
+secondary_project_name() {
+  [ -n "${SECONDARY_PROJECT_NUMBER:-}" ] || return 0
+  if ! SECONDARY_PROJECT_NAME=$(gh_query "Loading secondary project…" gh project view "$SECONDARY_PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json -q .title); then
+    SECONDARY_PROJECT_NAME="project #$SECONDARY_PROJECT_NUMBER"
+  fi
+}
+
 pr_state() {
   gh_query "Loading PR status…" gh pr view "$1" --json state,mergedAt \
     -q 'if .mergedAt == null then .state else "MERGED" end'
@@ -196,9 +208,10 @@ list_command() {
     "\(.content.repository) #\(.content.number)  \(.content.title)"'
 }
 
-add_command() {
-    local default clip ref
+add_to_project_command() {
+    local target_number=$1 target_name=$2 default clip ref
     local -a args clip_args
+    shift 2
 
     if [ $# -eq 0 ]; then
       default=""
@@ -209,11 +222,8 @@ add_command() {
           parse_pr "${clip_args[@]}" 2>/dev/null && default="$clip"
         fi
       fi
-      if ! project_name >/dev/null; then
-        PROJECT_NAME="$PROJECT_OWNER/$PROJECT_NUMBER"
-      fi
       ref=$(gum input --value "$default" --prompt "❯ " \
-        --header "PR to add to \"$PROJECT_NAME\"" \
+        --header "PR to add to \"$target_name\"" \
         --header.foreground 255 --prompt.foreground 212 \
         --placeholder "owner/repo#123") || return 1
       read -ra args <<< "$ref"
@@ -221,8 +231,83 @@ add_command() {
     else
       parse_pr "$@" || { echo "cannot parse PR reference: $*" >&2; exit 1; }
     fi
-    gh_action "Adding PR…" gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
+    gh_action "Adding PR…" gh project item-add "$target_number" --owner "$PROJECT_OWNER" \
       --url "https://github.com/$REPO/pull/$NUM"
+}
+
+add_command() {
+    if ! project_name >/dev/null; then
+      PROJECT_NAME="$PROJECT_OWNER/$PROJECT_NUMBER"
+    fi
+    add_to_project_command "$PROJECT_NUMBER" "$PROJECT_NAME" "$@"
+}
+
+add_multiple_to_project_command() {
+    local target_number=$1 target_name=$2 refs_text ref failures=0 added=0
+    local -a refs
+    shift 2
+
+    refs_text=$(gum write \
+      --header "PRs to add to \"$target_name\"" \
+      --header.foreground 255 \
+      --placeholder "Paste PR links, separated by commas, spaces, or newlines") || return 1
+
+    mapfile -t refs < <(printf '%s' "$refs_text" | tr ',[:space:]' '\n' | sed '/^$/d')
+    if [ "${#refs[@]}" -eq 0 ]; then
+      echo "No PRs provided."
+      return 1
+    fi
+
+    for ref in "${refs[@]}"; do
+      if ! parse_pr "$ref"; then
+        echo "cannot parse PR reference: $ref" >&2
+        failures=$((failures + 1))
+        continue
+      fi
+      if gh_action "Adding PR $REPO #$NUM…" gh project item-add "$target_number" --owner "$PROJECT_OWNER" \
+        --url "https://github.com/$REPO/pull/$NUM"; then
+        added=$((added + 1))
+      else
+        failures=$((failures + 1))
+      fi
+    done
+
+    echo "Added $added PR(s)."
+    [ "$failures" -eq 0 ]
+}
+
+add_multiple_command() {
+    if ! project_name >/dev/null; then
+      PROJECT_NAME="$PROJECT_OWNER/$PROJECT_NUMBER"
+    fi
+    add_multiple_to_project_command "$PROJECT_NUMBER" "$PROJECT_NAME"
+}
+
+select_secondary_project() {
+    SELECTED_SECONDARY_PROJECT_NUMBER=${SECONDARY_PROJECT_NUMBER:-}
+    SELECTED_SECONDARY_PROJECT_NAME=${SECONDARY_PROJECT_NAME:-}
+    if [ -z "$SELECTED_SECONDARY_PROJECT_NUMBER" ]; then
+      SELECTED_SECONDARY_PROJECT_NUMBER=$(gum input --header "Secondary project number" --prompt "❯ " --placeholder "Project number") || return 1
+    fi
+    if ! [[ $SELECTED_SECONDARY_PROJECT_NUMBER =~ ^[0-9]+$ ]]; then
+      echo "invalid secondary project number: $SELECTED_SECONDARY_PROJECT_NUMBER" >&2
+      return 1
+    fi
+    if [ -z "$SELECTED_SECONDARY_PROJECT_NAME" ]; then
+      if ! SELECTED_SECONDARY_PROJECT_NAME=$(gh_query "Loading secondary project…" gh project view "$SELECTED_SECONDARY_PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json -q .title); then
+        SELECTED_SECONDARY_PROJECT_NAME="project #$SELECTED_SECONDARY_PROJECT_NUMBER"
+      fi
+    fi
+}
+
+add_to_tracker_command() {
+    select_secondary_project || return 1
+    add_to_project_command "$SELECTED_SECONDARY_PROJECT_NUMBER" "$SELECTED_SECONDARY_PROJECT_NAME"
+}
+
+add_multiple_to_tracker_command() {
+    select_secondary_project || return 1
+    add_multiple_to_project_command "$SELECTED_SECONDARY_PROJECT_NUMBER" "$SELECTED_SECONDARY_PROJECT_NAME"
 }
 
 remove_command() {
@@ -283,6 +368,95 @@ choose_remove_command() {
     done <<< "$selection"
 
     [ "${#selected_ids[@]}" -gt 0 ] && remove_items "${selected_ids[@]}"
+}
+
+choose_remove_secondary_command() {
+    local original_number=$PROJECT_NUMBER original_name=${PROJECT_NAME:-} status
+    select_secondary_project || return 1
+    PROJECT_NUMBER=$SELECTED_SECONDARY_PROJECT_NUMBER
+    PROJECT_NAME=$SELECTED_SECONDARY_PROJECT_NAME
+    choose_remove_command
+    status=$?
+    PROJECT_NUMBER=$original_number
+    PROJECT_NAME=$original_name
+    return "$status"
+}
+
+move_items() {
+    local target_number=$1 id url moved=0 failures=0
+    shift
+
+    while IFS=$'\t' read -r id url; do
+      if gh_action "Adding PR to project #$target_number…" gh project item-add "$target_number" --owner "$PROJECT_OWNER" --url "$url"; then
+        if gh_action "Removing PR from this project…" gh project item-delete "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --id "$id"; then
+          moved=$((moved + 1))
+        else
+          failures=$((failures + 1))
+        fi
+      else
+        failures=$((failures + 1))
+      fi
+    done <<< "$(printf '%s\n' "$@")"
+
+    echo "Moved $moved PR(s) to project #$target_number."
+    [ "$failures" -eq 0 ]
+}
+
+choose_move_command() {
+    local target_number target_name selection choice index id repo number title url state
+    local -a rows choices selected
+    declare -A seen=()
+
+    select_secondary_project || return 1
+    target_number=$SELECTED_SECONDARY_PROJECT_NUMBER
+    target_name=$SELECTED_SECONDARY_PROJECT_NAME
+    if [ "$target_number" = "$PROJECT_NUMBER" ]; then
+      echo "secondary project must be different from the current project" >&2
+      return 1
+    fi
+
+    mapfile -t rows < <(items | jq -r '.items[] | select(.content.type=="PullRequest") |
+      [.id, .content.repository, .content.number, .content.title, .content.url] | @tsv')
+    if [ "${#rows[@]}" -eq 0 ]; then
+      echo "no pull requests in the project"
+      return 0
+    fi
+
+    for index in "${!rows[@]}"; do
+      IFS=$'\t' read -r id repo number title url <<< "${rows[index]}"
+      state=$(pr_state "$url" || echo UNKNOWN)
+      choices+=("$(printf '[%d] %-7s %s #%s  %s' \
+        "$((index + 1))" "$state" "$repo" "$number" "$title")")
+    done
+    if ! selection=$(printf '%s\n' "${choices[@]}" | gum filter \
+      --no-limit \
+      --header "PRs to move to \"$target_name\"" \
+      --placeholder "Filter PRs..." \
+      --height 15 \
+      --reverse); then
+      return 1
+    fi
+
+    while IFS= read -r choice; do
+      [ -z "$choice" ] && continue
+      if [[ $choice =~ ^\[([0-9]+)\] ]]; then
+        index=$((BASH_REMATCH[1] - 1))
+      else
+        echo "invalid selection: $choice" >&2
+        return 1
+      fi
+      if [ "$index" -lt 0 ] || [ "$index" -ge "${#rows[@]}" ]; then
+        echo "selection out of range: $((index + 1))" >&2
+        return 1
+      fi
+      IFS=$'\t' read -r id repo number title url <<< "${rows[index]}"
+      if [ -z "${seen[$id]+x}" ]; then
+        selected+=("$id"$'\t'"$url")
+        seen[$id]=1
+      fi
+    done <<< "$selection"
+
+    [ "${#selected[@]}" -gt 0 ] && move_items "$target_number" "${selected[@]}"
 }
 
 list_interactive_command() {
@@ -374,6 +548,18 @@ clear_interactive() {
     remove_items "${CLEAR_IDS[@]}"
 }
 
+clear_secondary_interactive() {
+    local original_number=$PROJECT_NUMBER original_name=${PROJECT_NAME:-} status
+    select_secondary_project || return 1
+    PROJECT_NUMBER=$SELECTED_SECONDARY_PROJECT_NUMBER
+    PROJECT_NAME=$SELECTED_SECONDARY_PROJECT_NAME
+    clear_interactive all "Clear all PRs from \"$PROJECT_NAME\"?"
+    status=$?
+    PROJECT_NUMBER=$original_number
+    PROJECT_NAME=$original_name
+    return "$status"
+}
+
 open_url() {
     "${GHPROJ_BROWSER:-firefox}" "$1"
 }
@@ -397,21 +583,33 @@ success_exit() {
 }
 
 interactive_menu() {
-    local index=0 key rest i menu_text
+    local index=0 key rest i menu_text tracker_single="t  Add a PR to another project" tracker_multiple="T  Add multiple PRs to another project" move_option="m  Move PRs from \"$PROJECT_NAME\" to another project" tracker_heading="Another project"
+    if [ -n "${SECONDARY_PROJECT_NUMBER:-}" ]; then
+      tracker_single="t  Add a PR to \"$SECONDARY_PROJECT_NAME\""
+      tracker_multiple="T  Add multiple PRs to \"$SECONDARY_PROJECT_NAME\""
+      move_option="m  Move PRs from \"$PROJECT_NAME\" to \"$SECONDARY_PROJECT_NAME\""
+      tracker_heading="$SECONDARY_PROJECT_NAME"
+    fi
     local -a options=(
       "a  Add a PR"
+      "A  Add multiple PRs"
       "c  Clear all closed and merged PRs"
       "r  Choose PR(s) to remove"
       "x  Clear all PRs"
       "l  List all PRs"
       "v  Open PR view"
       "p  Open project view"
-      "q  Quit without any changes"
+      "$tracker_single"
+      "$tracker_multiple"
+      "$move_option"
+      "R  Choose PR(s) to remove"
+      "X  Clear all PRs"
     )
 
     while true; do
-      menu_text="Manage PRs for \"$PROJECT_NAME\""
+      menu_text="Manage PRs"
       menu_text+=$'\n\n'
+      menu_text+="  "$'\033[4;38;5;215m'"$PROJECT_NAME"$'\033[0m\n'
       for i in "${!options[@]}"; do
         if [ "$i" -eq "$index" ]; then
           menu_text+=$'\033[38;5;212m❯ '
@@ -421,11 +619,12 @@ interactive_menu() {
           menu_text+="  ${options[i]}"$'\n'
         fi
         case "$i" in
-          0|3|6) menu_text+=$'\n' ;;
+          1|4) menu_text+=$'\n' ;;
+          7) menu_text+=$'\n  '$'\033[4;38;5;215m'"$tracker_heading"$'\033[0m\n' ;;
         esac
       done
       menu_text+=$'\n'
-      menu_text+=$'\033[38;5;241m↑/↓ or j/k navigate · enter select · a/c/r/x/l/v/p/q shortcuts\033[0m\n'
+      menu_text+=$'\033[38;5;241m↑/↓ or j/k navigate · enter select · q/esc/ctrl-c quit\033[0m\n'
       printf '\033[H'
       printf '%s\n' "$menu_text"
 
@@ -440,7 +639,7 @@ interactive_menu() {
           ;;
         k) if (( index > 0 )); then index=$((index - 1)); fi ;;
         j) if (( index < ${#options[@]} - 1 )); then index=$((index + 1)); fi ;;
-        a|A|c|C|r|R|x|X|l|L|v|V|p|P|q|Q) MENU_CHOICE=$key; return ;;
+        a|A|t|T|m|M|R|X|c|C|r|x|l|L|v|V|p|P|q|Q) MENU_CHOICE=$key; return ;;
         ""|$'\n'|$'\r') MENU_CHOICE=${options[index]:0:1}; return ;;
       esac
     done
@@ -455,19 +654,38 @@ case "${1:-}" in
     if ! project_name >/dev/null; then
       PROJECT_NAME="$PROJECT_OWNER/$PROJECT_NUMBER"
     fi
+    secondary_project_name
     interactive_menu
     printf '\033[H\033[2J'
     case "$MENU_CHOICE" in
-      a|A)
+      a)
         if add_command; then success_exit; fi
+        ;;
+      A)
+        if add_multiple_command; then success_exit; fi
+        ;;
+      t)
+        if add_to_tracker_command; then success_exit; fi
+        ;;
+      T)
+        if add_multiple_to_tracker_command; then success_exit; fi
+        ;;
+      m|M)
+        if choose_move_command; then success_exit; fi
+        ;;
+      R)
+        if choose_remove_secondary_command; then success_exit; fi
+        ;;
+      X)
+        if clear_secondary_interactive; then success_exit; fi
         ;;
       c|C)
         if clear_interactive not-open "Clear these non-open PRs?"; then success_exit; fi
         ;;
-      r|R)
+      r)
         if choose_remove_command; then success_exit; fi
         ;;
-      x|X)
+      x)
         if clear_interactive all "Clear all listed PRs?"; then success_exit; fi
         ;;
       l|L) list_interactive_command ;;
