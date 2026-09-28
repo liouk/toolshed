@@ -9,7 +9,8 @@ fi
 target="$SKRATCH_TARGET"
 
 tmpfile=$(mktemp /tmp/skratch.XXXXXX.md)
-trap 'rm -f "$tmpfile"' EXIT
+merged_file=""
+trap 'rm -f "$tmpfile"; if [[ -n "$merged_file" ]]; then rm -f "$merged_file"; fi' EXIT
 
 printf '# \n' > "$tmpfile"
 
@@ -23,9 +24,16 @@ fi
 
 mkdir -p "$(dirname "$target")"
 
-if [[ -s "$target" ]]; then
-    printf '\n\n' >> "$target"
+merged_file=$(mktemp "$(dirname "$target")/.skratch.XXXXXX")
+if [[ -f "$target" ]]; then
+    cp -p -- "$target" "$merged_file"
 fi
 
-printf '%s\n' "$content" >> "$target"
-echo "Note appended to $target"
+{
+    printf '%s\n\n' "$content"
+    if [[ -f "$target" ]]; then
+        cat -- "$target"
+    fi
+} > "$merged_file"
+mv -f -- "$merged_file" "$target"
+echo "Note prepended to $target"
