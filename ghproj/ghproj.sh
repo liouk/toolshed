@@ -35,8 +35,16 @@ parse_pr() {
   else return 1; fi
 }
 add_one() {
-  local p=$1 n=$2 ref; shift 2
-  if [ $# = 0 ]; then ref=$(gum input --header "PR to add to \"$n\"" --prompt '❯ ' --placeholder 'owner/repo#123') || return; read -ra refs <<< "$ref"; parse_pr "${refs[@]}" || return 1
+  local p=$1 n=$2 ref clipboard=""; shift 2
+  if [ $# = 0 ]; then
+    if command -v wl-paste >/dev/null 2>&1; then
+      clipboard=$(wl-paste --no-newline 2>/dev/null || true)
+      clipboard=${clipboard%$'\r'}
+      parse_pr "$clipboard" 2>/dev/null || clipboard=""
+    fi
+    ref=$(gum input --value "$clipboard" --header "PR to add to \"$n\"" --prompt '❯ ' --placeholder 'owner/repo#123') || return
+    read -ra refs <<< "$ref"
+    parse_pr "${refs[@]}" || return 1
   else parse_pr "$@" || return 1; fi
   gh project item-add "$p" --owner "$PROJECT_OWNER" --url "https://github.com/$REPO/pull/$NUM"
 }
