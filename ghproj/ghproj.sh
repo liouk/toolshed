@@ -3,25 +3,78 @@ set -euo pipefail
 
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/toolshed/ghproj/config.yaml"
 PROJECT_OWNER="${PROJECT_OWNER:-}"
-declare -a PROJECTS=() VIEWS=() TITLES=()
+declare -a PROJECTS=() VIEWS=() TITLES=() CUSTOM_FIELDS=() FIELD_DEFAULTS=() FIELD_SHORTCUTS=()
+
+append_project() {
+  PROJECTS+=("$1"); VIEWS+=("${2:-}"); TITLES+=("")
+  CUSTOM_FIELDS+=(""); FIELD_DEFAULTS+=(""); FIELD_SHORTCUTS+=('{}')
+}
+yaml_scalar() {
+  local value=$1
+  case "$value" in
+    \"*) jq -er 'select(type == "string")' <<< "$value";;
+    \'*\') value=${value:1:${#value}-2}; printf '%s' "${value//\'\'/\'}";;
+    *) printf '%s' "$value";;
+  esac
+}
 
 load_config() {
   [ -f "$CONFIG_FILE" ] || return 0
-  : "${PROJECT_OWNER:=$(sed -n 's/^owner:[[:space:]]*//p' "$CONFIG_FILE" | head -1)}"
-  while IFS='|' read -r p v; do
-    [ -z "$p" ] || { PROJECTS+=("$p"); VIEWS+=("$v"); TITLES+=(""); }
-  done < <(awk '/^[[:space:]]*-[[:space:]]*project:/{if(p!="")print p"|"v;sub(/.*project:[[:space:]]*/,"");p=$0;v="";next}/^[[:space:]]+view_url:/{sub(/.*view_url:[[:space:]]*/,"");v=$0}END{if(p!="")print p"|"v}' "$CONFIG_FILE")
+  local record value key i=-1 p v
+  : "${PROJECT_OWNER:=$(yaml_scalar "$(sed -n 's/^owner:[[:space:]]*//p' "$CONFIG_FILE" | head -1)")}"
+  # Read the supported block-style YAML keys, tracking custom_field indentation.
+  while IFS=$'\t' read -r record value; do
+    case "$record" in
+      project) append_project "$(yaml_scalar "$value")"; i=$((${#PROJECTS[@]}-1));;
+      view_url) VIEWS[i]=$(yaml_scalar "$value");;
+      name) CUSTOM_FIELDS[i]=$(yaml_scalar "$value");;
+      default) FIELD_DEFAULTS[i]=$(yaml_scalar "$value");;
+      shortcut)
+        key=$(yaml_scalar "${value%%$'\t'*}")
+        value=$(yaml_scalar "${value#*$'\t'}")
+        FIELD_SHORTCUTS[i]=$(jq -c --arg key "$key" --arg value "$value" '. + {($key): $value}' <<< "${FIELD_SHORTCUTS[i]}")
+        ;;
+    esac
+  done < <(awk '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      indent=match($0, /[^ ]/)-1
+      line=$0; sub(/^[[:space:]]*/, "", line); sub(/[[:space:]\r]+$/, "", line)
+      if (line ~ /^-[[:space:]]*project:/) {
+        sub(/^-[[:space:]]*project:[[:space:]]*/, "", line)
+        print "project\t" line; project=1; field=-1; shortcuts=-1; next
+      }
+      if (!project) next
+      if (field >= 0 && indent <= field) { field=-1; shortcuts=-1 }
+      if (shortcuts >= 0 && indent <= shortcuts) shortcuts=-1
+      key=line; sub(/:.*/, "", key)
+      value=line; sub(/^[^:]*:[[:space:]]*/, "", value)
+      if (key == "custom_field") { field=indent; next }
+      if (field >= 0) {
+        if (key == "shortcuts") { shortcuts=indent; next }
+        if (shortcuts >= 0) print "shortcut\t" key "\t" value
+        else if (key == "name" || key == "default") print key "\t" value
+      } else if (key == "view_url") print key "\t" value
+    }' "$CONFIG_FILE")
   if [ "${#PROJECTS[@]}" -eq 0 ]; then
     p=$(sed -n 's/^project:[[:space:]]*//p' "$CONFIG_FILE"|head -1); v=$(sed -n 's/^view_url:[[:space:]]*//p' "$CONFIG_FILE"|head -1)
-    [ -z "$p" ] || { PROJECTS+=("$p"); VIEWS+=("$v"); TITLES+=(""); }
+    [ -z "$p" ] || append_project "$p" "$v"
     p=$(sed -n 's/^secondary_project:[[:space:]]*//p' "$CONFIG_FILE"|head -1)
-    [ -z "$p" ] || { PROJECTS+=("$p"); VIEWS+=(""); TITLES+=(""); }
+    [ -z "$p" ] || append_project "$p"
   fi
 }
 save_config() {
   local i; mkdir -p "$(dirname "$CONFIG_FILE")"
   { printf 'owner: %s\nprojects:\n' "$PROJECT_OWNER"; for i in "${!PROJECTS[@]}"; do
       printf '  - project: %s\n' "${PROJECTS[i]}"; [ -z "${VIEWS[i]}" ] || printf '    view_url: %s\n' "${VIEWS[i]}"
+      if [ -n "${CUSTOM_FIELDS[i]}" ]; then
+        printf '    custom_field:\n      name: %s\n' "$(jq -Rn --arg v "${CUSTOM_FIELDS[i]}" '$v')"
+        [ -z "${FIELD_DEFAULTS[i]}" ] || printf '      default: %s\n' "$(jq -Rn --arg v "${FIELD_DEFAULTS[i]}" '$v')"
+        if [ "${FIELD_SHORTCUTS[i]}" != '{}' ]; then
+          printf '      shortcuts:\n'
+          jq -r 'to_entries[] | "        \(.key | tojson): \(.value | tojson)"' <<< "${FIELD_SHORTCUTS[i]}"
+        fi
+      fi
     done; } > "$CONFIG_FILE"
 }
 number() { [[ $1 =~ ^[0-9]+$ ]]; }
@@ -34,8 +87,135 @@ parse_pr() {
   elif [ $# = 3 ]; then REPO="$1/$2"; NUM=$3
   else return 1; fi
 }
+field_error() { printf 'Custom field: %s\n' "$*" >&2; return 1; }
+with_progress() {
+  local message=$1; shift
+  printf '… %s\n' "$message" >&2
+  if [ -t 2 ] && command -v gum >/dev/null 2>&1; then
+    gum spin --title "$message" --show-stdout --show-stderr -- "$@"
+  else
+    "$@"
+  fi
+}
+choose_field_value() {
+  local name=$1 default=$2 shortcuts=$3 selected=0 i key rest shortcut
+  shift 3
+  local -a options=("$@")
+  [ -t 0 ] || field_error 'selection requires an interactive terminal.' || return
+  for i in "${!options[@]}"; do [ "${options[i]}" != "$default" ] || selected=$i; done
+  while :; do
+    printf '\033[H\033[2J%s\n\n' "$name" >&2
+    for i in "${!options[@]}"; do
+      shortcut=$(jq -r --arg value "${options[i]}" 'to_entries | map(select(.value == $value) | .key) | join("/")' <<< "$shortcuts")
+      if [ "$i" = "$selected" ]; then printf '\033[38;5;212m❯ ' >&2; else printf '  ' >&2; fi
+      [ -z "$shortcut" ] || printf '[%s] ' "$shortcut" >&2
+      printf '%s\033[0m\n' "${options[i]}" >&2
+    done
+    printf '\n↑/↓ or j/k navigate · enter select · digit shortcut selects · esc/ctrl-c cancel\n' >&2
+    IFS= read -rsn1 key || return 130
+    case "$key" in
+      j) selected=$(((selected+1)%${#options[@]}));;
+      k) selected=$(((selected-1+${#options[@]})%${#options[@]}));;
+      $'\e')
+        rest=''; IFS= read -rsn2 -t 0.1 rest || true
+        case "$rest" in
+          '[A') selected=$(((selected-1+${#options[@]})%${#options[@]}));;
+          '[B') selected=$(((selected+1)%${#options[@]}));;
+          *) return 130;;
+        esac;;
+      $'\003') return 130;;
+      ''|$'\n'|$'\r') printf '%s' "${options[selected]}"; return;;
+      [0-9])
+        if shortcut=$(jq -er --arg key "$key" '.[$key] // empty' <<< "$shortcuts"); then
+          printf '%s' "$shortcut"; return
+        fi;;
+    esac
+  done
+}
+prepare_field() {
+  local p=$1 context=$2 i index=-1 field_id project_id option_id metadata kind name default shortcuts value
+  local -a options=()
+  FIELD_EDIT_ARGS=()
+  FIELD_LABEL=''; FIELD_VALUE=''
+  for i in "${!PROJECTS[@]}"; do
+    if [ "${PROJECTS[i]}" = "$p" ]; then index=$i; break; fi
+  done
+  [ "$index" -ge 0 ] && [ -n "${CUSTOM_FIELDS[index]}" ] || return 0
+  name=${CUSTOM_FIELDS[index]}; default=${FIELD_DEFAULTS[index]}; shortcuts=${FIELD_SHORTCUTS[index]}
+  field_id=$(with_progress "Loading $name for $context…" gh project field-list "$p" --owner "$PROJECT_OWNER" --format json --limit 1000 |
+    jq -er --arg name "$name" '[.fields[] | select(.name == $name)] | if length == 1 then .[0].id else empty end') || {
+      field_error "cannot resolve '$name' in project #$p."; return 1;
+    }
+  metadata=$(with_progress "Loading $name options…" gh api graphql -f query='query($id: ID!) {
+    node(id: $id) {
+      ... on ProjectV2FieldCommon { id name dataType project { id } }
+      ... on ProjectV2SingleSelectField { options { id name } }
+    }
+  }' -f id="$field_id" --jq '.data.node') || return
+  kind=$(jq -er '.dataType' <<< "$metadata") || return
+  project_id=$(jq -er '.project.id' <<< "$metadata") || return
+  FIELD_EDIT_ARGS=(--project-id "$project_id" --field-id "$field_id")
+  case "$kind" in
+    SINGLE_SELECT)
+      mapfile -t options < <(jq -r '.options[].name' <<< "$metadata")
+      [ "${#options[@]}" -gt 0 ] || { field_error "'$name' has no options."; return 1; }
+      if [ -n "$default" ] && ! jq -e --arg value "$default" 'any(.options[]; .name == $value)' <<< "$metadata" >/dev/null; then
+        field_error "default '$default' is not an option for '$name'."; return 1
+      fi
+      if ! jq -e --argjson field "$metadata" 'to_entries | all(.[]; (.key | test("^[0-9]$")) and (.value as $v | any($field.options[]; .name == $v)))' <<< "$shortcuts" >/dev/null; then
+        field_error "shortcuts for '$name' must map single digits to existing option names."; return 1
+      fi
+      value=$(choose_field_value "$name — $context" "$default" "$shortcuts" "${options[@]}") || return
+      option_id=$(jq -er --arg value "$value" '.options[] | select(.name == $value) | .id' <<< "$metadata") || return
+      FIELD_EDIT_ARGS+=(--single-select-option-id "$option_id")
+      ;;
+    TEXT|NUMBER|DATE)
+      [ "$shortcuts" = '{}' ] || { field_error "shortcuts require a single-select field."; return 1; }
+      while :; do
+        value=$(gum input --header "$name ($kind) — $context" --value "$default") || return
+        case "$kind" in
+          TEXT) FIELD_EDIT_ARGS+=(--text "$value"); break;;
+          NUMBER)
+            if [[ $value =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
+              FIELD_EDIT_ARGS+=(--number "$value"); break
+            fi
+            printf 'Enter a valid number.\n' >&2;;
+          DATE)
+            if [[ $value =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [ "$(date -d "$value" +%F 2>/dev/null)" = "$value" ]; then
+              FIELD_EDIT_ARGS+=(--date "$value"); break
+            fi
+            printf 'Enter a valid date (YYYY-MM-DD).\n' >&2;;
+        esac
+        default=$value
+      done;;
+    *) field_error "unsupported type '$kind' for '$name'."; return 1;;
+  esac
+  FIELD_LABEL=$name; FIELD_VALUE=$value
+  if [ -t 2 ]; then printf '\033[H\033[2J' >&2; fi
+  printf '%s: %s\n\n' "$FIELD_LABEL" "$FIELD_VALUE" >&2
+}
+add_prepared() {
+  local p=$1 url=$2 item_id
+  if [ "${#FIELD_EDIT_ARGS[@]}" = 0 ]; then
+    if ! with_progress "Adding PR to project #$p: $url" gh project item-add "$p" --owner "$PROJECT_OWNER" --url "$url"; then
+      printf 'Failed to add PR to project #%s: %s\n' "$p" "$url" >&2
+      return 1
+    fi
+    printf '✓ PR added to project #%s: %s\n' "$p" "$url" >&2
+    return
+  fi
+  item_id=$(with_progress "Adding PR to project #$p: $url" gh project item-add "$p" --owner "$PROJECT_OWNER" --url "$url" --format json --jq '.id') || {
+    printf 'Failed to add PR to project #%s: %s\n' "$p" "$url" >&2
+    return 1
+  }
+  if ! with_progress "Setting $FIELD_LABEL to $FIELD_VALUE…" gh project item-edit --id "$item_id" "${FIELD_EDIT_ARGS[@]}"; then
+    printf 'PR is in project #%s, but setting its custom field failed: %s\n' "$p" "$url" >&2
+    return 1
+  fi
+  printf '✓ PR added to project #%s with %s: %s\n  %s\n' "$p" "$FIELD_LABEL" "$FIELD_VALUE" "$url" >&2
+}
 add_one() {
-  local p=$1 n=$2 ref clipboard=""; shift 2
+  local p=$1 n=$2 ref clipboard=""; local -a refs=(); shift 2
   if [ $# = 0 ]; then
     if command -v wl-paste >/dev/null 2>&1; then
       clipboard=$(wl-paste --no-newline 2>/dev/null || true)
@@ -46,11 +226,17 @@ add_one() {
     read -ra refs <<< "$ref"
     parse_pr "${refs[@]}" || return 1
   else parse_pr "$@" || return 1; fi
-  gh project item-add "$p" --owner "$PROJECT_OWNER" --url "https://github.com/$REPO/pull/$NUM"
+  prepare_field "$p" "$n" || return
+  add_prepared "$p" "https://github.com/$REPO/pull/$NUM"
 }
 add_many() {
   local p=$1 n=$2 ref text; shift 2; text=$(gum write --header "PRs to add to \"$n\"" --placeholder 'Paste PR links, separated by commas, spaces, or newlines') || return
-  while IFS= read -r ref; do parse_pr "$ref" && gh project item-add "$p" --owner "$PROJECT_OWNER" --url "https://github.com/$REPO/pull/$NUM"; done < <(printf '%s' "$text"|tr ',[:space:]' '\n'|sed '/^$/d')
+  [ -n "$text" ] || return 0
+  prepare_field "$p" "all PRs in $n" || return
+  while IFS= read -r ref; do
+    parse_pr "$ref" || { printf 'Invalid PR reference: %s\n' "$ref" >&2; return 1; }
+    add_prepared "$p" "https://github.com/$REPO/pull/$NUM" || return
+  done < <(printf '%s\n' "$text"|tr ',[:space:]' '\n'|sed '/^$/d')
 }
 select_prs() {
   local p=$1 n=$2 row id repo num pr url i selection; local -a rows=() choices=(); declare -A seen=()
@@ -124,11 +310,19 @@ load_config
 case "${1:-}" in
   help|-h|--help) usage;;
   config) shift; case "${1:-}" in
-    add) PROJECTS+=("${2:?}"); VIEWS+=("${3:-}"); TITLES+=("");;
-    remove) for i in "${!PROJECTS[@]}"; do [ "${PROJECTS[i]}" = "${2:?}" ]&&{ unset 'PROJECTS[i]' 'VIEWS[i]' 'TITLES[i]'; PROJECTS=("${PROJECTS[@]}"); VIEWS=("${VIEWS[@]}"); TITLES=("${TITLES[@]}"); }; done;;
-    *) PROJECT_OWNER="${1:?}"; PROJECTS=("${2:?}"); VIEWS=("${3:-}"); TITLES=("");;
+    add) append_project "${2:?}" "${3:-}";;
+    remove)
+      for i in "${!PROJECTS[@]}"; do
+        if [ "${PROJECTS[i]}" = "${2:?}" ]; then
+          unset 'PROJECTS[i]' 'VIEWS[i]' 'TITLES[i]' 'CUSTOM_FIELDS[i]' 'FIELD_DEFAULTS[i]' 'FIELD_SHORTCUTS[i]'
+        fi
+      done
+      PROJECTS=("${PROJECTS[@]}"); VIEWS=("${VIEWS[@]}"); TITLES=("${TITLES[@]}")
+      CUSTOM_FIELDS=("${CUSTOM_FIELDS[@]}"); FIELD_DEFAULTS=("${FIELD_DEFAULTS[@]}"); FIELD_SHORTCUTS=("${FIELD_SHORTCUTS[@]}")
+      ;;
+    *) PROJECT_OWNER="${1:?}"; PROJECTS=(); VIEWS=(); TITLES=(); CUSTOM_FIELDS=(); FIELD_DEFAULTS=(); FIELD_SHORTCUTS=(); append_project "${2:?}" "${3:-}";;
   esac; save_config;;
-  "") command -v gum >/dev/null||exit 1; if [ "${#PROJECTS[@]}" = 0 ]; then PROJECT_OWNER=$(gum input --header owner)||exit; p=$(gum input --header project)||exit; PROJECTS=("$p"); VIEWS=(""); TITLES=(""); save_config; fi; for i in "${!PROJECTS[@]}"; do title "$i" >/dev/null; done; interactive;;
+  "") command -v gum >/dev/null||exit 1; if [ "${#PROJECTS[@]}" = 0 ]; then PROJECT_OWNER=$(gum input --header owner)||exit; p=$(gum input --header project)||exit; append_project "$p"; save_config; fi; for i in "${!PROJECTS[@]}"; do title "$i" >/dev/null; done; interactive;;
   list) items "${PROJECTS[0]}"|jq -r '.items[]|select(.content.type=="PullRequest")|"\(.content.repository) #\(.content.number)  \(.content.title)"';;
   add) shift; add_one "${PROJECTS[0]}" "$(title 0)" "$@";;
   *) usage >&2; exit 1;;
